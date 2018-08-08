@@ -1,0 +1,13 @@
+# Build configuration for https://www.tea-ci.org
+
+build:
+  image: teaci/msys64
+  pull: true
+  shell: msys64
+  branches:
+    - tea-ci
+  commands:
+    - pacman -S git python pkg-config mingw-w64-x86_64-gcc mingw-w64-x86_64-eigen3 mingw-w64-x86_64-qt5 mingw-w64-x86_64-fftw mingw-w64-x86_64-libtiff
+    - ./configure
+    - ./build
+    - ./run_tests
