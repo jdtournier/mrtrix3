@@ -24,12 +24,13 @@
 #include "phase_encoding.h"
 
 #include "dwi/sdeconv/csd.h"
+#include "dwi/sdeconv/fmt_csd.h"
 #include "dwi/sdeconv/msmt_csd.h"
 
 using namespace MR;
 using namespace App;
 
-const char *const algorithms[] = {"csd", "msmt_csd", NULL};
+const char *const algorithms[] = {"csd", "msmt_csd", "fmt_csd", NULL};
 
 // clang-format off
 const OptionGroup CommonOptions = OptionGroup ("Options common to more than one algorithm")
@@ -119,6 +120,7 @@ void usage() {
     + CommonOptions
     + DWI::SDeconv::CSD_options
     + DWI::SDeconv::MSMT_CSD_options
+    + DWI::SDeconv::FMT_CSD_options
     + Stride::Options;
 }
 // clang-format on
@@ -225,6 +227,57 @@ private:
   Eigen::VectorXd output_data;
 };
 
+class FMT_Processor {
+public:
+  FMT_Processor(const DWI::SDeconv::FMT_CSD::Shared &shared,
+                Image<bool> &mask_image,
+                vector<Image<float>> odf_images,
+                Image<float> dwi_modelled = Image<float>())
+      : sdeconv(shared),
+        mask_image(mask_image),
+        odf_images(odf_images),
+        modelled_image(dwi_modelled),
+        dwi_data(shared.grad.rows()),
+        output_data(shared.num_coefs()) {}
+
+  void operator()(Image<float> &dwi_image) {
+    if (mask_image.valid()) {
+      assign_pos_of(dwi_image, 0, 3).to(mask_image);
+      if (!mask_image.value())
+        return;
+    }
+
+    dwi_data = dwi_image.row(3);
+
+    sdeconv(dwi_data, output_data);
+    if (sdeconv.niter >= sdeconv.shared.problem.max_niter) {
+      INFO("voxel [ " + str(dwi_image.index(0)) + " " + str(dwi_image.index(1)) + " " + str(dwi_image.index(2)) +
+           " ] did not reach full convergence");
+    }
+
+    size_t j = 0;
+    for (size_t i = 0; i < odf_images.size(); ++i) {
+      assign_pos_of(dwi_image, 0, 3).to(odf_images[i]);
+      for (auto l = Loop(3)(odf_images[i]); l; ++l)
+        odf_images[i].value() = output_data[j++];
+    }
+
+    if (modelled_image.valid()) {
+      assign_pos_of(dwi_image, 0, 3).to(modelled_image);
+      sdeconv.predict(dwi_data, output_data);
+      modelled_image.row(3) = dwi_data;
+    }
+  }
+
+private:
+  DWI::SDeconv::FMT_CSD sdeconv;
+  Image<bool> mask_image;
+  vector<Image<float>> odf_images;
+  Image<float> modelled_image;
+  Eigen::VectorXd dwi_data;
+  Eigen::VectorXd output_data;
+};
+
 void run() {
 
   auto header_in = Header::open(argument[1]);
@@ -310,6 +363,54 @@ void run() {
     auto dwi = header_in.get_image<float>().with_direct_io(3);
     ThreadedLoop("performing MSMT CSD (" + str(shared.num_shells()) + " shell" + (shared.num_shells() > 1 ? "s" : "") +
                      ", " + str(num_tissues) + " tissue" + (num_tissues > 1 ? "s" : "") + ")",
+                 dwi,
+                 0,
+                 3)
+        .run(processor, dwi);
+
+  } else if (algorithm == 2) {
+
+    if (argument.size() % 2)
+      throw Exception("FMT_CSD algorithm expects pairs of (input response function & output FOD image) to be provided");
+
+    DWI::SDeconv::FMT_CSD::Shared shared(header_in);
+    shared.parse_cmdline_options();
+
+    const size_t num_tissues = (argument.size() - 2) / 2;
+    vector<std::string> response_paths;
+    vector<std::string> odf_paths;
+    for (size_t i = 0; i < num_tissues; ++i) {
+      response_paths.push_back(argument[i * 2 + 2]);
+      odf_paths.push_back(argument[i * 2 + 3]);
+    }
+
+    try {
+      shared.set_responses(response_paths);
+    } catch (Exception &e) {
+      throw Exception(
+          e, "FMT_CSD algorithm expects the first file in each argument pair to be an input response function file");
+    }
+
+    shared.init();
+
+    DWI::stash_DW_scheme(header_out, shared.grad);
+
+    vector<Image<float>> odfs;
+    for (size_t i = 0; i < num_tissues; ++i) {
+      header_out.size(3) = Math::SH::NforL(shared.lmax[i]);
+      odfs.push_back(Image<float>(Image<float>::create(odf_paths[i], header_out)));
+    }
+
+    Image<float> dwi_modelled;
+    auto opt = get_options("predicted_signal");
+    if (opt.size())
+      dwi_modelled = Image<float>::create(opt[0][0], header_in);
+
+    FMT_Processor processor(shared, mask, odfs, dwi_modelled);
+    auto dwi = header_in.get_image<float>();
+    ThreadedLoop("performing fast MT CSD (" + str(shared.num_shells()) + " shell" +
+                     (shared.num_shells() > 1 ? "s" : "") + ", " + str(num_tissues) + " tissue" +
+                     (num_tissues > 1 ? "s" : "") + ")",
                  dwi,
                  0,
                  3)
