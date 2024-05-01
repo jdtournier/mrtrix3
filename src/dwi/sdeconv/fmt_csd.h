@@ -34,9 +34,7 @@
 #define DEFAULT_FMTCSD_NEG_LAMBDA 1.0e-10
 #define DEFAULT_FMTCSD_SOFT_NEG_LAMBDA 1.0
 
-namespace MR {
-namespace DWI {
-namespace SDeconv {
+namespace MR::DWI::SDeconv {
 
 extern const App::OptionGroup FMT_CSD_options;
 
@@ -64,7 +62,7 @@ public:
           max_niter(max_niter) {
       Mt_M.triangularView<Eigen::Lower>() = problem.transpose() * problem;
       if (norm_lambda)
-        Mt_M.diagonal().array() += norm_lambda;
+        Mt_M.diagonal().array() += Mt_M(0, 0) * norm_lambda;
     }
   };
 
@@ -128,7 +126,7 @@ private:
   Eigen::MatrixXd work, C;
   Eigen::VectorXd p, Mt_b, Mt_bc, c;
   Eigen::LLT<Eigen::MatrixXd> llt;
-  vector<int> neg, old_neg;
+  std::vector<int> neg, old_neg;
 };
 
 class FMT_CSD {
@@ -164,7 +162,7 @@ public:
         soft_neg_regularisation = opt[0][0];
     }
 
-    void set_responses(const vector<std::string> &files) {
+    void set_responses(const std::vector<std::string> &files) {
       lmax_response.clear();
       for (const auto &s : files) {
         Eigen::MatrixXd r;
@@ -179,7 +177,7 @@ public:
       response_files = files;
     }
 
-    void set_responses(const vector<Eigen::MatrixXd> &matrices) {
+    void set_responses(const std::vector<Eigen::MatrixXd> &matrices) {
       responses = matrices;
       prepare_responses();
     }
@@ -226,7 +224,7 @@ public:
 
       Eigen::MatrixXd C = Eigen::MatrixXd::Zero(grad.rows(), nparams);
 
-      vector<size_t> dwilist;
+      std::vector<size_t> dwilist;
       for (size_t i = 0; i != size_t(grad.rows()); i++)
         dwilist.push_back(i);
 
@@ -269,7 +267,7 @@ public:
             }
             li++;
           }
-          vector<size_t> vols = shells[shell_idx].get_volumes();
+          std::vector<size_t> vols = shells[shell_idx].get_volumes();
           for (size_t idx = 0; idx < vols.size(); idx++) {
             Eigen::VectorXd SHT_(SHT.row(vols[idx]).head(tissue_n));
             SHT_ = (SHT_.array() * fconv.array()).matrix();
@@ -279,8 +277,8 @@ public:
         pbegin += tissue_n;
       }
 
-      vector<size_t> m(num_tissues());
-      vector<size_t> n(num_tissues());
+      std::vector<size_t> m(num_tissues());
+      std::vector<size_t> n(num_tissues());
       size_t M = 0;
       size_t N = 0;
 
@@ -330,12 +328,15 @@ public:
                                             constraint_min_norm_regularisation);
 
       default_type lambda = 0.0;
-      for (size_t n = 0; n < responses.size(); ++n)
-        if (lmax[n] > 0)
+      size_t n_tt = 0;
+      for (size_t n = 0; n < responses.size(); ++n) {
+        if (lmax[n] > 0) {
           lambda += responses[n](0, 0);
-      lambda *= soft_neg_regularisation * C.rows();
-      VAR(lambda);
-      nnls = RegularisedNonNegativeLeastSquares::Shared(C1, A1, lambda, 0.0);
+          ++n_tt;
+        }
+      }
+      lambda *= 10.0 * soft_neg_regularisation / (n_tt * C.rows());
+      nnls = RegularisedNonNegativeLeastSquares::Shared(C1, A1, lambda, solution_min_norm_regularisation);
 
       INFO("Fast multi-tissue CSD initialised successfully");
     }
@@ -348,9 +349,9 @@ public:
     const Eigen::MatrixXd grad;
     DWI::Shells shells;
     Eigen::MatrixXd HR_dirs, C1, A0, A1;
-    vector<uint32_t> lmax, lmax_response;
-    vector<Eigen::MatrixXd> responses;
-    vector<std::string> response_files;
+    std::vector<uint32_t> lmax, lmax_response;
+    std::vector<Eigen::MatrixXd> responses;
+    std::vector<std::string> response_files;
     Math::ICLS::Problem<double> problem;
     RegularisedNonNegativeLeastSquares::Shared nnls;
     double solution_min_norm_regularisation, constraint_min_norm_regularisation, soft_neg_regularisation;
@@ -421,8 +422,6 @@ private:
   Eigen::VectorXd densities, residuals, odfs, constraint_offset;
 };
 
-} // namespace SDeconv
-} // namespace DWI
-} // namespace MR
+} // namespace MR::DWI::SDeconv
 
 #endif
