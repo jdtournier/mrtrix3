@@ -391,6 +391,9 @@ public:
         constraint_offset(shared.C1.rows()) {}
 
   void operator()(const Eigen::VectorXd &data, Eigen::VectorXd &output) {
+    if (data.isZero())
+      return;
+
     niter = solver(densities, data);
     output.setZero();
 
