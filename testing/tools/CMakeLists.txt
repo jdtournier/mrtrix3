@@ -1,4 +1,5 @@
 set(CPP_TOOLS_SRCS
+    testing_cpp_cli.cpp
     testing_diff_dir.cpp
     testing_diff_fixel.cpp
     testing_diff_fixel_old.cpp
@@ -17,7 +18,10 @@ set(CPP_TOOLS_SRCS
 set(PYTHON_TOOLS_SRCS
     testing_check_npy
     testing_gen_npy
+    testing_python_cli
 )
+
+add_custom_target(testing_tools)
 
 function(add_testing_cmd CMD_SRC)
     # Extract the filename without an extension (NAME_WE)
@@ -29,6 +33,7 @@ function(add_testing_cmd CMD_SRC)
         mrtrix::tests-lib
     )
     set_target_properties(${CMD_NAME} PROPERTIES LINK_DEPENDS_NO_SHARED true)
+    add_dependencies(testing_tools ${CMD_NAME})
 endfunction()
 
 
